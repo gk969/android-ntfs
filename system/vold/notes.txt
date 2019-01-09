@@ -1,0 +1,7 @@
+device/friendly-arm/nanopi3/fstab.nanopi3.emmc
+fstab entry item
+/devices/platform/nxp-ehci/usb1/                    /storage/usbdisk1   auto      defaults    voldmanaged=usbdisk1:auto,noemulatedsd
+
+
+int DirectVolume::handleBlockEvent(NetlinkEvent *evt)
+Find target volume and label such as "usbdisk1", by devpath such as /devices/platform/nxp-ehci/usb1/*
