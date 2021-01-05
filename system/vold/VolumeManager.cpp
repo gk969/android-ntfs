@@ -248,18 +248,14 @@ void VolumeManager::handleBlockEvent(NetlinkEvent *evt) {
     bool hit = false;
     for (it = mVolumes->begin(); it != mVolumes->end(); ++it) {
         if (!(*it)->handleBlockEvent(evt)) {
-#ifdef NETLINK_DEBUG
             SLOGD("Device '%s' event handled by volume %s\n", devpath, (*it)->getLabel());
-#endif
             hit = true;
             break;
         }
     }
 
     if (!hit) {
-#ifdef NETLINK_DEBUG
         SLOGW("No volumes handled block event for '%s'", devpath);
-#endif
     }
 }
 

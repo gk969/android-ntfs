@@ -23,6 +23,9 @@
 class NetlinkEvent;
 class VolumeManager;
 
+
+#define MOUNT_MULTI_PART
+
 class Volume {
 private:
     int mState;

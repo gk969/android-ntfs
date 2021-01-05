@@ -34,8 +34,7 @@
 
 #define PARTITION_DEBUG
 
-PathInfo::PathInfo(const char *p)
-{
+PathInfo::PathInfo(const char *p) {
     warned = false;
     pattern = strdup(p);
 
@@ -46,34 +45,31 @@ PathInfo::PathInfo(const char *p)
     }
 }
 
-PathInfo::~PathInfo()
-{
+PathInfo::~PathInfo() {
     free(pattern);
 }
 
-bool PathInfo::match(const char *path)
-{
+bool PathInfo::match(const char *path) {
     switch (patternType) {
-    case prefix:
-    {
-        bool ret = (strncmp(path, pattern, strlen(pattern)) == 0);
-        if (!warned && ret && (strlen(pattern) != strlen(path))) {
-            SLOGW("Deprecated implied prefix pattern detected, please use '%s*' instead", pattern);
-            warned = true;
+        case prefix: {
+            bool ret = (strncmp(path, pattern, strlen(pattern)) == 0);
+            if (!warned && ret && (strlen(pattern) != strlen(path))) {
+                SLOGW("Deprecated implied prefix pattern detected, please use '%s*' instead", pattern);
+                warned = true;
+            }
+            return ret;
         }
-        return ret;
-    }
-    case wildcard:
-        return fnmatch(pattern, path, 0) == 0;
+        case wildcard:
+            return fnmatch(pattern, path, 0) == 0;
     }
     SLOGE("Bad matching type");
     return false;
 }
 
 DirectVolume::DirectVolume(VolumeManager *vm, const fstab_rec* rec, int flags) :
-        Volume(vm, rec, flags) {
+    Volume(vm, rec, flags) {
     SLOGD("new DirectVolume %s ", rec->label);
-    
+
     mPaths = new PathCollection();
     for (int i = 0; i < MAX_PARTITIONS; i++)
         mPartMinors[i] = -1;
@@ -105,7 +101,7 @@ DirectVolume::~DirectVolume() {
     for (it = mPaths->begin(); it != mPaths->end(); ++it)
         delete *it;
     delete mPaths;
-    
+
     free(mDevPath);
     mDevPath = NULL;
 }
@@ -138,7 +134,7 @@ void DirectVolume::handleVolumeUnshared() {
 int DirectVolume::handleBlockEvent(NetlinkEvent *evt) {
     const char *dp = evt->findParam("DEVPATH");
     SLOGD("DirectVolume %s state %s handleBlockEvent devpath %s", getLabel(), getStateStr(), dp);
-    
+
     PathCollection::iterator  it;
     for (it = mPaths->begin(); it != mPaths->end(); ++it) {
         if ((*it)->match(dp)) {
@@ -146,17 +142,16 @@ int DirectVolume::handleBlockEvent(NetlinkEvent *evt) {
             int action = evt->getAction();
             const char *devtype = evt->findParam("DEVTYPE");
 
+            
             if (action == NetlinkEvent::NlActionAdd) {
                 int st = getState();
-                if(!(st == Volume::State_NoMedia || st == Volume::State_Pending || st == Volume::State_Idle)){
+                if (!(st == Volume::State_NoMedia || st == Volume::State_Pending || st == Volume::State_Idle)) {
                     errno = ENODEV;
                     return -1;
                 }
                 SLOGD("DirectVolume %s NlActionAdd @ %s", getLabel(), dp);
-                
-                free(mDevPath);
-                mDevPath = strdup(dp);
-                
+
+
                 int major = atoi(evt->findParam("MAJOR"));
                 int minor = atoi(evt->findParam("MINOR"));
                 char nodepath[255];
@@ -166,13 +161,27 @@ int DirectVolume::handleBlockEvent(NetlinkEvent *evt) {
                          major, minor);
                 if (createDeviceNode(nodepath, major, minor)) {
                     SLOGE("Error making device node '%s' (%s)", nodepath,
-                                                               strerror(errno));
+                          strerror(errno));
                 }
                 if (!strcmp(devtype, "disk")) {
                     handleDiskAdded(dp, evt);
+#ifdef MOUNT_MULTI_PART
+                    return -1;
+#endif
                 } else {
+                    if (mDevPath != NULL) {
+                        if (strcmp(dp, mDevPath)) {
+                            errno = ENODEV;
+                            return -1;
+                        }
+                    }
+                    
                     handlePartitionAdded(dp, evt);
                 }
+                
+                free(mDevPath);
+                mDevPath = strdup(dp);
+                
                 /* Send notification iff disk is ready (ie all partitions found) */
                 if (getState() == Volume::State_Idle) {
                     char msg[255];
@@ -184,15 +193,17 @@ int DirectVolume::handleBlockEvent(NetlinkEvent *evt) {
                                                          msg, false);
                 }
             } else if (action == NetlinkEvent::NlActionRemove) {
-                if(mDevPath != NULL){
-                    if(strcmp(dp, mDevPath)){
+                if (mDevPath != NULL) {
+                    if (strcmp(dp, mDevPath)) {
                         errno = ENODEV;
                         return -1;
                     }
                 }
-                
+                free(mDevPath);
+                mDevPath=NULL;
+
                 SLOGD("DirectVolume %s NlActionRemove @ %s", getLabel(), dp);
-                
+
                 if (!strcmp(devtype, "disk")) {
                     handleDiskRemoved(dp, evt);
                 } else {
@@ -206,7 +217,7 @@ int DirectVolume::handleBlockEvent(NetlinkEvent *evt) {
                     handlePartitionChanged(dp, evt);
                 }
             } else {
-                    SLOGW("Ignoring non add/remove/change event");
+                SLOGW("Ignoring non add/remove/change event");
             }
 
             return 0;
@@ -216,14 +227,20 @@ int DirectVolume::handleBlockEvent(NetlinkEvent *evt) {
     return -1;
 }
 
-void DirectVolume::handleDiskAdded(const char * /*devpath*/,
-                                   NetlinkEvent *evt) {
+void DirectVolume::handleDiskAdded(const char * devpath, NetlinkEvent *evt) {
     mDiskMajor = atoi(evt->findParam("MAJOR"));
     mDiskMinor = atoi(evt->findParam("MINOR"));
-
-    const char *tmp = evt->findParam("NPARTS");
-    if (tmp) {
-        mDiskNumParts = atoi(tmp);
+    const char *part_str = evt->findParam("NPARTS");
+    
+    SLOGI("dev %s handleDiskAdded major %d minor %d part_num %s", devpath, mDiskMajor, mDiskMinor, part_str);
+    
+    if (part_str) {
+        mDiskNumParts = atoi(part_str);
+#ifdef MOUNT_MULTI_PART
+        if (mDiskNumParts > 1) {
+            mDiskNumParts = 1;
+        }
+#endif
     } else {
         SLOGW("Kernel block uevent missing 'NPARTS'");
         mDiskNumParts = 1;
@@ -249,13 +266,18 @@ void DirectVolume::handleDiskAdded(const char * /*devpath*/,
 void DirectVolume::handlePartitionAdded(const char *devpath, NetlinkEvent *evt) {
     int major = atoi(evt->findParam("MAJOR"));
     int minor = atoi(evt->findParam("MINOR"));
+    const char *part_str = evt->findParam("PARTN");
+    
+    SLOGI("dev %s handlePartitionAdded major %d minor %d part_num %s", devpath, major, minor, part_str);
 
     int part_num;
-
-    const char *tmp = evt->findParam("PARTN");
-
-    if (tmp) {
-        part_num = atoi(tmp);
+    if (part_str) {
+        part_num = atoi(part_str);
+#ifdef MOUNT_MULTI_PART
+        if (part_num > 1) {
+            part_num = 1;
+        }
+#endif
     } else {
         SLOGW("Kernel block uevent missing 'PARTN'");
         part_num = 1;
@@ -275,14 +297,14 @@ void DirectVolume::handlePartitionAdded(const char *devpath, NetlinkEvent *evt) 
         return;
     }
 #ifdef PARTITION_DEBUG
-    SLOGD("Dv:partAdd: part_num = %d, minor = %d\n", part_num, minor);
+    SLOGD("Dv:partAdd: devpath = %s, part_num = %d, minor = %d\n", devpath, part_num, minor);
 #endif
     if (part_num >= MAX_PARTITIONS) {
-        SLOGE("Dv:partAdd: ignoring part_num = %d (max: %d)\n", part_num, MAX_PARTITIONS-1);
+        SLOGE("Dv:partAdd: ignoring part_num = %d (max: %d)\n", part_num, MAX_PARTITIONS - 1);
     } else {
         if ((mPartMinors[part_num - 1] == -1) && mPendingPartCount)
             mPendingPartCount--;
-        mPartMinors[part_num -1] = minor;
+        mPartMinors[part_num - 1] = minor;
     }
 
     if (!mPendingPartCount) {
@@ -294,6 +316,7 @@ void DirectVolume::handlePartitionAdded(const char *devpath, NetlinkEvent *evt) 
 #ifdef PATCH_FOR_SLSIAP
             if (mRetryMount == true || !strncmp(getLabel(), "usbdisk", 7)) {
 #else
+            SLOGD("Dv:partAdd: mRetryMount %d", mRetryMount);
             if (mRetryMount == true) {
 #endif
                 mRetryMount = false;
@@ -307,7 +330,7 @@ void DirectVolume::handlePartitionAdded(const char *devpath, NetlinkEvent *evt) 
     }
 }
 
-void DirectVolume::handleDiskChanged(const char * /*devpath*/,
+void DirectVolume::handleDiskChanged(const char * devpath,
                                      NetlinkEvent *evt) {
     int major = atoi(evt->findParam("MAJOR"));
     int minor = atoi(evt->findParam("MINOR"));
@@ -316,10 +339,15 @@ void DirectVolume::handleDiskChanged(const char * /*devpath*/,
         return;
     }
 
-    SLOGI("Volume %s disk has changed", getLabel());
+    SLOGI("Volume %s disk %s has changed", getLabel(), devpath);
     const char *tmp = evt->findParam("NPARTS");
     if (tmp) {
         mDiskNumParts = atoi(tmp);
+#ifdef MOUNT_MULTI_PART
+        if (mDiskNumParts > 1) {
+            mDiskNumParts = 1;
+        }
+#endif
     } else {
         SLOGW("Kernel block uevent missing 'NPARTS'");
         mDiskNumParts = 1;
@@ -338,11 +366,11 @@ void DirectVolume::handleDiskChanged(const char * /*devpath*/,
     }
 }
 
-void DirectVolume::handlePartitionChanged(const char * /*devpath*/,
-                                          NetlinkEvent *evt) {
+void DirectVolume::handlePartitionChanged(const char * devpath,
+        NetlinkEvent *evt) {
     int major = atoi(evt->findParam("MAJOR"));
     int minor = atoi(evt->findParam("MINOR"));
-    SLOGD("Volume %s %s partition %d:%d changed\n", getLabel(), getMountpoint(), major, minor);
+    SLOGD("Volume %s devpath %s @ %s partition %d:%d changed\n", getLabel(), devpath, getMountpoint(), major, minor);
 }
 
 void DirectVolume::handleDiskRemoved(const char * /*devpath*/,
@@ -360,12 +388,12 @@ void DirectVolume::handleDiskRemoved(const char * /*devpath*/,
     snprintf(msg, sizeof(msg), "Volume %s %s disk removed (%d:%d)",
              getLabel(), getFuseMountpoint(), major, minor);
     mVm->getBroadcaster()->sendBroadcast(ResponseCode::VolumeDiskRemoved,
-                                             msg, false);
+                                         msg, false);
     setState(Volume::State_NoMedia);
 }
 
 void DirectVolume::handlePartitionRemoved(const char * /*devpath*/,
-                                          NetlinkEvent *evt) {
+        NetlinkEvent *evt) {
     int major = atoi(evt->findParam("MAJOR"));
     int minor = atoi(evt->findParam("MINOR"));
     char msg[255];
@@ -401,7 +429,7 @@ void DirectVolume::handlePartitionRemoved(const char * /*devpath*/,
 
         if (Volume::unmountVol(true, false)) {
             SLOGE("Failed to unmount volume on bad removal (%s)",
-                 strerror(errno));
+                  strerror(errno));
             // XXX: At this point we're screwed for now
         } else {
             SLOGD("Crisis averted");
@@ -415,7 +443,7 @@ void DirectVolume::handlePartitionRemoved(const char * /*devpath*/,
 
         if (mVm->unshareVolume(getLabel(), "ums")) {
             SLOGE("Failed to unshare volume on bad removal (%s)",
-                strerror(errno));
+                  strerror(errno));
         } else {
             SLOGD("Crisis averted");
         }
@@ -442,7 +470,7 @@ int DirectVolume::getDeviceNodes(dev_t *devs, int max) {
         }
         return mDiskNumParts;
     }
-    devs[0] = MKDEV(mDiskMajor, mPartMinors[mPartIdx -1]);
+    devs[0] = MKDEV(mDiskMajor, mPartMinors[mPartIdx - 1]);
     return 1;
 }
 
@@ -450,8 +478,7 @@ int DirectVolume::getDeviceNodes(dev_t *devs, int max) {
  * Called from base to update device info,
  * e.g. When setting up an dm-crypt mapping for the sd card.
  */
-int DirectVolume::updateDeviceInfo(char *new_path, int new_major, int new_minor)
-{
+int DirectVolume::updateDeviceInfo(char *new_path, int new_major, int new_minor) {
     PathCollection::iterator it;
 
     if (mPartIdx == -1) {
@@ -494,7 +521,7 @@ int DirectVolume::updateDeviceInfo(char *new_path, int new_major, int new_minor)
      * will call partition one.
      */
     mPartIdx = new_minor;
-    mPartMinors[new_minor-1] = new_minor;
+    mPartMinors[new_minor - 1] = new_minor;
 
     mIsDecrypted = 1;
 
@@ -505,8 +532,7 @@ int DirectVolume::updateDeviceInfo(char *new_path, int new_major, int new_minor)
  * Called from base to revert device info to the way it was before a
  * crypto mapping was created for it.
  */
-void DirectVolume::revertDeviceInfo(void)
-{
+void DirectVolume::revertDeviceInfo(void) {
     if (mIsDecrypted) {
         mDiskMajor = mOrigDiskMajor;
         mDiskMinor = mOrigDiskMinor;
@@ -522,8 +548,7 @@ void DirectVolume::revertDeviceInfo(void)
 /*
  * Called from base to give cryptfs all the info it needs to encrypt eligible volumes
  */
-int DirectVolume::getVolInfo(struct volume_info *v)
-{
+int DirectVolume::getVolInfo(struct volume_info *v) {
     strcpy(v->label, mLabel);
     strcpy(v->mnt_point, mMountpoint);
     v->flags = getFlags();
