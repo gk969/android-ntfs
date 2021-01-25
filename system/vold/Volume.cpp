@@ -37,7 +37,7 @@
 
 #include <blkid/blkid.h>
 
-#define LOG_TAG "Vold"
+#define LOG_TAG "Volume"
 
 #include <cutils/fs.h>
 #include <cutils/log.h>
@@ -333,7 +333,7 @@ int Volume::mountVol() {
     char crypto_state[PROPERTY_VALUE_MAX];
     char encrypt_progress[PROPERTY_VALUE_MAX];
     
-    SLOGI("Volume::mountVol %s", getLabel());
+    SLOGI("Volume::mountVol %s state %s", getLabel(), getStateStr());
 
     property_get("vold.decrypt", decrypt_state, "");
     property_get("vold.encrypt_progress", encrypt_progress, "");
@@ -349,6 +349,7 @@ int Volume::mountVol() {
         mVm->getBroadcaster()->sendBroadcast(
                                          ResponseCode::VolumeMountFailedNoMedia,
                                          errmsg, false);
+        SLOGE(errmsg);
         errno = ENODEV;
         return -1;
     } else if (getState() != Volume::State_Idle) {
@@ -356,6 +357,7 @@ int Volume::mountVol() {
         if (getState() == Volume::State_Pending) {
             mRetryMount = true;
         }
+        SLOGI("Volume %s not idle", getLabel());
         return -1;
     }
 
@@ -370,55 +372,6 @@ int Volume::mountVol() {
     if (!n) {
         SLOGE("Failed to get device nodes (%s)\n", strerror(errno));
         return -1;
-    }
-
-    /* If we're running encrypted, and the volume is marked as encryptable and nonremovable,
-     * and also marked as providing Asec storage, then we need to decrypt
-     * that partition, and update the volume object to point to it's new decrypted
-     * block device
-     */
-    property_get("ro.crypto.state", crypto_state, "");
-    if (providesAsec &&
-        ((flags & (VOL_NONREMOVABLE | VOL_ENCRYPTABLE))==(VOL_NONREMOVABLE | VOL_ENCRYPTABLE)) &&
-        !strcmp(crypto_state, "encrypted") && !isDecrypted()) {
-       char new_sys_path[MAXPATHLEN];
-       char nodepath[256];
-       int new_major, new_minor;
-
-       if (n != 1) {
-           /* We only expect one device node returned when mounting encryptable volumes */
-           SLOGE("Too many device nodes returned when mounting %s\n", getMountpoint());
-           return -1;
-       }
-
-       if (cryptfs_setup_volume(getLabel(), MAJOR(deviceNodes[0]), MINOR(deviceNodes[0]),
-                                new_sys_path, sizeof(new_sys_path),
-                                &new_major, &new_minor)) {
-           SLOGE("Cannot setup encryption mapping for %s\n", getMountpoint());
-           return -1;
-       }
-       /* We now have the new sysfs path for the decrypted block device, and the
-        * majore and minor numbers for it.  So, create the device, update the
-        * path to the new sysfs path, and continue.
-        */
-        snprintf(nodepath,
-                 sizeof(nodepath), "/dev/block/vold/%d:%d",
-                 new_major, new_minor);
-        if (createDeviceNode(nodepath, new_major, new_minor)) {
-            SLOGE("Error making device node '%s' (%s)", nodepath,
-                                                       strerror(errno));
-        }
-
-        // Todo: Either create sys filename from nodepath, or pass in bogus path so
-        //       vold ignores state changes on this internal device.
-        updateDeviceInfo(nodepath, new_major, new_minor);
-
-        /* Get the device nodes again, because they just changed */
-        n = getDeviceNodes((dev_t *) &deviceNodes, 4);
-        if (!n) {
-            SLOGE("Failed to get device nodes (%s)\n", strerror(errno));
-            return -1;
-        }
     }
 
     SLOGI("try mountVol DeviceNodes %d", n);

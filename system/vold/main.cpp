@@ -166,9 +166,9 @@ static int process_config(VolumeManager *vm)
     if (property_get("ro.bootdev", propbuf, "")) {
         fstab_filename[i++] = '.';
         strncat(fstab_filename + i, propbuf, 16);
-        SLOGI("Loading config %s\n", fstab_filename);
     }
 
+    SLOGI("Loading config %s\n", fstab_filename);
     fstab = fs_mgr_read_fstab(fstab_filename);
     if (!fstab) {
         SLOGE("failed to open %s\n", fstab_filename);
